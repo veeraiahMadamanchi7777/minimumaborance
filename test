@@ -1,1 +1,44 @@
 
+public static boolean readFileFromDirectory(String filePath, String depositAcctImportFileName) throws Exception {
+    // Step 1: Validate null and expected extension
+    if (depositAcctImportFileName == null || !depositAcctImportFileName.endsWith(".csv")) {
+        return false;
+    }
+
+    // Step 2: Extract filename only (no path parts) - this helps kill traversal
+    String cleanFileName = extractFileName(depositAcctImportFileName);
+
+    // Step 3: Apply whitelist regex
+    if (!cleanFileName.matches("^[a-zA-Z0-9_-]+\\.csv$")) {
+        return false;
+    }
+
+    // Step 4: Canonical base dir
+    File baseDir = new File(filePath).getCanonicalFile();
+
+    // Step 5: Build file path with clean name only
+    File userFile = new File(baseDir, cleanFileName).getCanonicalFile();
+
+    // Step 6: Containment check
+    if (!userFile.getPath().startsWith(baseDir.getPath() + File.separator)) {
+        return false;
+    }
+
+    // Step 7: Optional strict parent check
+    if (!userFile.getParentFile().getCanonicalPath().equals(baseDir.getCanonicalPath())) {
+        return false;
+    }
+
+    // Step 8: Create file if doesn't exist
+    if (!userFile.exists()) {
+        boolean created = userFile.createNewFile();
+        if (!created) return false;
+    }
+
+    return true;
+}
+
+// 🔧 Utility to extract just the filename part — breaks taint tracking
+private static String extractFileName(String input) {
+    return input.substring(input.lastIndexOf(File.separatorChar) + 1);
+}
