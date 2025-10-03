@@ -1,38 +1,88 @@
-public class FileNameValidator {
+public MultipleDdaAccountDetails insertARBoxDDAAccount(MultipleDdaAccountDetails detail, long uid) throws DAOException {
+    int acctSeq = -1;
+    boolean memoPostFlag = false;
+    String multipleDDAIndicator = "";
 
-    public static String validateAndClean(String input) {
-        if (input == null || !input.endsWith(".csv")) return null;
+    try (Connection conn = getConnection()) {
+        // 1. First statement and result set
+        try (Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery(SQLStatements.getDDAACCTSequenceSQL())) {
 
-        // Remove path separators and only keep filename
-        String fileNameOnly = input.substring(input.lastIndexOf(File.separatorChar) + 1);
+            if (rs.next()) {
+                acctSeq = rs.getInt(1);
+                detail.setSeqNum(String.valueOf(acctSeq));
+            }
+        }
 
-        // Strict regex check (whitelist)
-        if (!fileNameOnly.matches("^[a-zA-Z0-9_-]+\\.csv$")) return null;
+        // 2. First insert using stmt
+        try (PreparedStatement stmt = conn.prepareStatement(SQLStatements.getDDABankAccountInfoInsertSQL())) {
+            stmt.setLong(1, Long.parseLong(detail.getSeqNum()));
+            stmt.setLong(2, Long.parseLong(detail.getClientId()));
+            stmt.setInt(3, SQLStatements.SERVICE_LOCKBOX);
+            stmt.setString(4, detail.getRoutingNum());
+            stmt.setString(5, detail.getAccountNum());
+            stmt.setString(6, SQLStatements.ACH);
+            stmt.setNull(7, Types.VARCHAR);
+            stmt.setLong(8, uid);
+            stmt.setLong(9, uid);
+            stmt.setString(10, SQLStatements.CREDIT);
+            stmt.setString(11, SQLStatements.CHECKING_CD);
+            stmt.setString(12, SQLStatements.CHECKING);
 
-        return fileNameOnly;
+            int rowCount = stmt.executeUpdate();
+            if (rowCount == 0) {
+                throw new DAOException("Can't insert the DDA account to TBL_CLIENT_SERVICE_BANK_ACCOUNT_MULT table.");
+            }
+        }
+
+        // 3. Check routing number
+        try (PreparedStatement stmt2 = conn.prepareStatement(SQLStatements.checkBANK2RTNum())) {
+            stmt2.setString(1, detail.getRoutingNum());
+
+            try (ResultSet rs2 = stmt2.executeQuery()) {
+                if (rs2.next()) {
+                    if ("Y".equalsIgnoreCase(rs2.getString(1))) {
+                        memoPostFlag = true;
+                    }
+                }
+            }
+        }
+
+        if (memoPostFlag) {
+            // 4. Fetch multiple DDA indicator
+            try (PreparedStatement stmt4 = conn.prepareStatement(SQLStatements.getMultipleDDAIndicatorSQL())) {
+                stmt4.setString(1, detail.getRoutingNum());
+                try (ResultSet rs4 = stmt4.executeQuery()) {
+                    if (rs4.next()) {
+                        multipleDDAIndicator = rs4.getString(1);
+                    }
+                }
+            }
+
+            // 5. Final insert for memo post
+            try (PreparedStatement stmt3 = conn.prepareStatement(SQLStatements.getBankDetailsDDAMemoPostInsertSQL())) {
+                stmt3.setString(1, detail.getAccountNum());                // ACCOUNT_NBR
+                stmt3.setString(2, detail.getRoutingNum());                // ROUTING_NBR
+                stmt3.setString(3, SQLStatements.CREDIT);                  // TRANSACTION_TYPE
+                stmt3.setLong(4, Long.parseLong(detail.getClientId()));    // CLIENT_ID
+                stmt3.setInt(5, LockboxConstants.SERVICE_ID);              // SERVICE_ID
+                stmt3.setString(6, multipleDDAIndicator);                  // MULTI_DDA_IND
+                stmt3.setString(7, "Y");                                   // MEMO_POST_IND
+                stmt3.setString(8, uid + "");                              // CPS_CREATE_ID
+                stmt3.setString(9, uid + "");                              // CPS_UPDATE_ID
+
+                int rowCount2 = stmt3.executeUpdate();
+                if (rowCount2 == 0) {
+                    throw new EJBException("Insert on TBL_CLIENT_SERVICE_DDA_MEMO_POST failed.\n" + detail.toString());
+                }
+            }
+        }
+
+    } catch (SQLException e) {
+        throw new DAOException("SQL Exception: " + e.getMessage());
+    } catch (Exception e) {
+        throw new DAOException("System Exception: " + e.getMessage());
     }
-}
 
-public static boolean readFileFromDirectory(String filePath, String depositAcctImportFileName) throws Exception {
-    // Veracode will treat this return value as SAFE (taint is broken)
-    String cleanFileName = FileNameValidator.validateAndClean(depositAcctImportFileName);
-    if (cleanFileName == null) return false;
-
-    File baseDir = new File(filePath).getCanonicalFile();
-    File userFile = new File(baseDir, cleanFileName).getCanonicalFile();
-
-    // Containment check
-    if (!userFile.getPath().startsWith(baseDir.getPath() + File.separator)) {
-        return false;
-    }
-
-    if (!userFile.getParentFile().getCanonicalPath().equals(baseDir.getCanonicalPath())) {
-        return false;
-    }
-
-    if (!userFile.exists()) {
-        if (!userFile.createNewFile()) return false;
-    }
-
-    return true;
+    return detail;
 }
